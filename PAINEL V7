@@ -1,0 +1,526 @@
+--[[
+    DARKZIN XITADO - MM2 Ultra Edition (Fixed for Delta)
+    Estética: Satoru Gojo / Infinite Void
+    Versão: 2.2 | Data: 16/10/2026
+]]
+
+local Theme = {
+    MainBG = Color3.fromRGB(5, 5, 10),
+    GlassBG = Color3.fromRGB(15, 15, 25),
+    Accent = Color3.fromRGB(0, 162, 255),
+    AccentGlow = Color3.fromRGB(0, 100, 200),
+    Text = Color3.fromRGB(255, 255, 255),
+    TextMuted = Color3.fromRGB(150, 150, 180),
+    Border = Color3.fromRGB(40, 40, 60),
+    
+    Murder = Color3.fromRGB(255, 40, 80),
+    Sheriff = Color3.fromRGB(0, 180, 255),
+    Innocent = Color3.fromRGB(40, 255, 150),
+    Gun = Color3.fromRGB(255, 220, 0)
+}
+
+local CORRECT_KEY = "DARK"
+
+-- Estados Globais
+getgenv().DZ_ESP_Inno = false
+getgenv().DZ_ESP_Sheriff = false
+getgenv().DZ_ESP_Murder = false
+getgenv().DZ_ESP_Gun = false
+getgenv().DZ_SilentAim = false
+getgenv().DZ_AutoGun = false
+
+-- Serviços
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Utilitários de Interface
+local function SafeParent(gui)
+    local targets = {game:GetService("CoreGui"), LocalPlayer:WaitForChild("PlayerGui")}
+    for _, target in pairs(targets) do
+        pcall(function() gui.Parent = target end)
+    end
+end
+
+local function MakeDraggable(gui)
+    local dragging, dragInput, dragStart, startPos
+    gui.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = gui.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    gui.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    RunService.RenderStepped:Connect(function()
+        if dragging and dragInput then
+            local delta = dragInput.Position - dragStart
+            gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- Lógica de Detecção de Papéis (Corrigida)
+local function GetPlayerRole(player)
+    if not player or not player.Character then return "Innocent" end
+    local char = player.Character
+    local bp = player:FindFirstChild("Backpack")
+    
+    if char:FindFirstChild("Knife") or (bp and bp:FindFirstChild("Knife")) then
+        return "Murder"
+    elseif char:FindFirstChild("Gun") or (bp and bp:FindFirstChild("Gun")) then
+        return "Sheriff"
+    end
+    return "Innocent"
+end
+
+-- ESP Otimizado (Evita Memory Leak)
+local function CreateESP(player)
+    local function SetupHighlight(char)
+        if not char then return end
+        local highlight = char:FindFirstChild("DZ_ESP_Highlight") or Instance.new("Highlight")
+        highlight.Name = "DZ_ESP_Highlight"
+        highlight.FillTransparency = 0.6
+        highlight.OutlineTransparency = 0
+        highlight.Parent = char
+        
+        local connection
+        connection = RunService.Heartbeat:Connect(function()
+            if not char or not char.Parent then connection:Disconnect() return end
+            local role = GetPlayerRole(player)
+            local enabled = false
+            local color = Color3.new(1,1,1)
+            
+            if role == "Murder" and getgenv().DZ_ESP_Murder then enabled = true color = Theme.Murder
+            elseif role == "Sheriff" and getgenv().DZ_ESP_Sheriff then enabled = true color = Theme.Sheriff
+            elseif role == "Innocent" and getgenv().DZ_ESP_Inno then enabled = true color = Theme.Innocent end
+            
+            highlight.Enabled = enabled
+            highlight.FillColor = color
+            highlight.OutlineColor = Color3.new(1,1,1)
+        end)
+    end
+    player.CharacterAdded:Connect(SetupHighlight)
+    if player.Character then SetupHighlight(player.Character) end
+end
+
+local function GunESP()
+    task.spawn(function()
+        while task.wait(1) do
+            if getgenv().DZ_ESP_Gun then
+                for _, v in pairs(workspace:GetDescendants()) do
+                    if (v.Name == "Gun" or v.Name == "DroppedGun") and v:IsA("BasePart") then
+                        if not v:FindFirstChild("DZ_Highlight") then
+                            local h = Instance.new("Highlight")
+                            h.Name = "DZ_Highlight"
+                            h.FillColor = Theme.Gun
+                            h.OutlineColor = Color3.new(1,1,1)
+                            h.Parent = v
+                        end
+                    end
+                end
+            else
+                for _, v in pairs(workspace:GetDescendants()) do
+                    if v.Name == "DZ_Highlight" then v:Destroy() end
+                end
+            end
+        end
+    end)
+end
+
+-- Silent Aim / Aimbot (Corrigido para Delta)
+local function GetClosestPlayer()
+    local closest = nil
+    local dist = math.huge
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local pos, onScreen = Camera:WorldToViewportPoint(player.Character.Head.Position)
+            if onScreen then
+                local magnitude = (Vector2.new(pos.X, pos.Y) - UserInputService:GetMouseLocation()).Magnitude
+                if magnitude < dist then 
+                    closest = player 
+                    dist = magnitude 
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- Hook Seguro para Delta
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    if not checkcaller() and method == "FireServer" and getgenv().DZ_SilentAim then
+        if self.Name:lower():find("shoot") or self.Name:lower():find("fire") then
+            local target = GetClosestPlayer()
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                args[1] = target.Character.Head.Position
+                return oldNamecall(self, unpack(args))
+            end
+        end
+    end
+    return oldNamecall(self, ...)
+end)
+
+-- Auto Gun Logic (Teleport Suave)
+-- Auto Gun Logic (Teleport apenas se Sheriff estiver morto)
+local function AutoGunLogic()
+    task.spawn(function()
+        while task.wait(0.5) do
+            if getgenv().DZ_AutoGun then
+                pcall(function()
+                    local isSheriffAlive = false
+                    for _, p in pairs(Players:GetPlayers()) do
+                        if GetPlayerRole(p) == "Sheriff" then
+                            isSheriffAlive = true
+                            break
+                        end
+                    end
+
+                    if not isSheriffAlive then
+                        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            for _, v in pairs(workspace:GetDescendants()) do
+                                if (v.Name == "Gun" or v.Name == "DroppedGun") and v:IsA("BasePart") then
+                                    root.CFrame = v.CFrame
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+-- UI PRINCIPAL
+local function CreateMainUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "DarkzinXitadoGui"
+    SafeParent(ScreenGui)
+    getgenv().DZ_MainGui = ScreenGui
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 500, 0, 350)
+    MainFrame.Position = UDim2.new(0.5, -250, 0.5, -175)
+    MainFrame.BackgroundColor3 = Theme.MainBG
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    local MainCorner = Instance.new("UICorner", MainFrame)
+    MainCorner.CornerRadius = UDim.new(0, 20)
+    
+    local MainStroke = Instance.new("UIStroke", MainFrame)
+    MainStroke.Thickness = 2
+    MainStroke.Color = Theme.Accent
+
+    local Header = Instance.new("Frame")
+    Header.Size = UDim2.new(1, 0, 0, 80)
+    Header.BackgroundColor3 = Theme.GlassBG
+    Header.BorderSizePixel = 0
+    Header.Parent = MainFrame
+    Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 25)
+
+    local GojoImg = Instance.new("ImageLabel")
+    GojoImg.Size = UDim2.new(0, 60, 0, 60)
+    GojoImg.Position = UDim2.new(0, 10, 0.5, -30)
+    GojoImg.Image = "rbxassetid://14518331511"
+    GojoImg.BackgroundColor3 = Theme.MainBG
+    GojoImg.Parent = Header
+    Instance.new("UICorner", GojoImg).CornerRadius = UDim.new(1, 0)
+
+    local Title = Instance.new("TextLabel")
+    Title.Text = "DARKZIN XITADO"
+    Title.Size = UDim2.new(1, -140, 1, 0)
+    Title.Position = UDim2.new(0, 80, 0, 0)
+    Title.TextColor3 = Theme.Text
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 24
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.BackgroundTransparency = 1
+    Title.Parent = Header
+
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Text = "✕"
+    CloseBtn.Size = UDim2.new(0, 35, 0, 35)
+    CloseBtn.Position = UDim2.new(1, -45, 0, 22)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    CloseBtn.TextColor3 = Theme.Text
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.Parent = Header
+    Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 10)
+    CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+
+    local MinBtn = Instance.new("TextButton")
+    MinBtn.Text = "—"
+    MinBtn.Size = UDim2.new(0, 35, 0, 35)
+    MinBtn.Position = UDim2.new(1, -85, 0, 22)
+    MinBtn.BackgroundColor3 = Theme.GlassBG
+    MinBtn.TextColor3 = Theme.Text
+    MinBtn.Font = Enum.Font.GothamBold
+    MinBtn.Parent = Header
+    Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 10)
+
+    local minimized = false
+    MinBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        MainFrame.Visible = not minimized
+        if minimized then
+            local Mini = Instance.new("TextButton")
+            Mini.Name = "DZ_Mini"
+            Mini.Text = "OPEN"
+            Mini.Size = UDim2.new(0, 80, 0, 30)
+            Mini.Position = UDim2.new(0.5, -40, 0.1, 0)
+            Mini.BackgroundColor3 = Theme.Accent
+            Mini.TextColor3 = Theme.Text
+            Mini.Parent = ScreenGui
+            Instance.new("UICorner", Mini).CornerRadius = UDim.new(0, 8)
+            MakeDraggable(Mini)
+            Mini.MouseButton1Click:Connect(function()
+                MainFrame.Visible = true
+                Mini:Destroy()
+                minimized = false
+            end)
+        end
+    end)
+
+    local Sidebar = Instance.new("Frame")
+    Sidebar.Size = UDim2.new(0, 140, 1, -80)
+    Sidebar.Position = UDim2.new(0, 0, 0, 80)
+    Sidebar.BackgroundColor3 = Theme.GlassBG
+    Sidebar.BorderSizePixel = 0
+    Sidebar.Parent = MainFrame
+    Instance.new("UICorner", Sidebar).CornerRadius = UDim.new(0, 0, 0, 25)
+
+    local TabLayout = Instance.new("UIListLayout", Sidebar)
+    TabLayout.Padding = UDim.new(0, 10)
+    TabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    TabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+    local PageContainer = Instance.new("Frame")
+    PageContainer.Size = UDim2.new(1, -150, 1, -100)
+    PageContainer.Position = UDim2.new(0, 145, 0, 90)
+    PageContainer.BackgroundTransparency = 1
+    PageContainer.Parent = MainFrame
+
+    local function CreatePage(name)
+        local Page = Instance.new("ScrollingFrame")
+        Page.Name = name .. "Page"
+        Page.Size = UDim2.new(1, 0, 1, 0)
+        Page.BackgroundTransparency = 1
+        Page.Visible = false
+        Page.ScrollBarThickness = 2
+        Page.Parent = PageContainer
+        local Layout = Instance.new("UIListLayout", Page)
+        Layout.Padding = UDim.new(0, 10)
+        Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        return Page
+    end
+
+    local Pages = { ESP = CreatePage("ESP"), Combat = CreatePage("Combat"), Info = CreatePage("Info") }
+
+    local function CreateTabBtn(name, page)
+        local Btn = Instance.new("TextButton")
+        Btn.Size = UDim2.new(0, 120, 0, 40)
+        Btn.BackgroundColor3 = Theme.GlassBG
+        Btn.Text = name
+        Btn.TextColor3 = Theme.TextMuted
+        Btn.Font = Enum.Font.GothamMedium
+        Btn.TextSize = 14
+        Btn.Parent = Sidebar
+        Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 10)
+        Btn.MouseButton1Click:Connect(function()
+            for _, p in pairs(Pages) do p.Visible = false end
+            page.Visible = true
+            for _, b in pairs(Sidebar:GetChildren()) do if b:IsA("TextButton") then b.TextColor3 = Theme.TextMuted end end
+            Btn.TextColor3 = Theme.Accent
+        end)
+    end
+
+    local function CreateToggle(parent, text, callback)
+        local ToggleFrame = Instance.new("TextButton")
+        ToggleFrame.Size = UDim2.new(0, 300, 0, 45)
+        ToggleFrame.BackgroundColor3 = Theme.GlassBG
+        ToggleFrame.Text = ""
+        ToggleFrame.AutoButtonColor = false
+        ToggleFrame.Parent = parent
+        Instance.new("UICorner", ToggleFrame).CornerRadius = UDim.new(0, 12)
+        local Stroke = Instance.new("UIStroke", ToggleFrame)
+        Stroke.Thickness = 1
+        Stroke.Color = Theme.Border
+
+        local Label = Instance.new("TextLabel")
+        Label.Text = text
+        Label.Size = UDim2.new(1, -60, 1, 0)
+        Label.Position = UDim2.new(0, 15, 0, 0)
+        Label.TextColor3 = Theme.Text
+        Label.Font = Enum.Font.Gotham
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.BackgroundTransparency = 1
+        Label.Parent = ToggleFrame
+
+        local Indicator = Instance.new("Frame")
+        Indicator.Size = UDim2.new(0, 40, 0, 20)
+        Indicator.Position = UDim2.new(1, -50, 0.5, -10)
+        Indicator.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+        Indicator.Parent = ToggleFrame
+        Instance.new("UICorner", Indicator).CornerRadius = UDim.new(1, 0)
+
+        local Dot = Instance.new("Frame")
+        Dot.Size = UDim2.new(0, 16, 0, 16)
+        Dot.Position = UDim2.new(0, 2, 0.5, -8)
+        Dot.BackgroundColor3 = Color3.fromRGB(150, 150, 160)
+        Dot.Parent = Indicator
+        Instance.new("UICorner", Dot).CornerRadius = UDim.new(1, 0)
+
+        local state = false
+        ToggleFrame.MouseButton1Click:Connect(function()
+            state = not state
+            callback(state)
+            TweenService:Create(Dot, TweenInfo.new(0.2), {
+                Position = state and UDim2.new(0, 22, 0.5, -8) or UDim2.new(0, 2, 0.5, -8),
+                BackgroundColor3 = state and Theme.Accent or Color3.fromRGB(150, 150, 160)
+            }):Play()
+            Stroke.Color = state and Theme.Accent or Theme.Border
+        end)
+    end
+
+    CreateTabBtn("Visibilidade", Pages.ESP)
+    CreateTabBtn("Combate", Pages.Combat)
+    CreateTabBtn("Informações", Pages.Info)
+
+    CreateToggle(Pages.ESP, "ESP Innocent", function(s) getgenv().DZ_ESP_Inno = s end)
+    CreateToggle(Pages.ESP, "ESP Sheriff", function(s) getgenv().DZ_ESP_Sheriff = s end)
+    CreateToggle(Pages.ESP, "ESP Murderer", function(s) getgenv().DZ_ESP_Murder = s end)
+    CreateToggle(Pages.ESP, "ESP Gun (Arma)", function(s) getgenv().DZ_ESP_Gun = s end)
+    CreateToggle(Pages.Combat, "Silent Aim / Auto-Shoot", function(s) getgenv().DZ_SilentAim = s end)
+    CreateToggle(Pages.Combat, "Auto Get Gun", function(s) getgenv().DZ_AutoGun = s end)
+
+    local function CreateShootButton(roleType)
+        local ShootBtn = Instance.new("TextButton")
+        ShootBtn.Text = "TIRO!"
+        ShootBtn.Size = UDim2.new(0, 80, 0, 40)
+        ShootBtn.Position = UDim2.new(0.5, -40, 0.5, -20)
+        ShootBtn.BackgroundColor3 = (roleType == "Murder") and Theme.Murder or Theme.Sheriff
+        ShootBtn.TextColor3 = Theme.Text
+        ShootBtn.Font = Enum.Font.GothamBold
+        ShootBtn.Parent = ScreenGui
+        Instance.new("UICorner", ShootBtn).CornerRadius = UDim.new(0, 10)
+        MakeDraggable(ShootBtn)
+
+        ShootBtn.MouseButton1Click:Connect(function()
+            local target = GetClosestPlayer()
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                local remote = ReplicatedStorage:FindFirstChild("Shoot", true) or ReplicatedStorage:FindFirstChild("Fire", true)
+                if remote then 
+                    remote:FireServer(target.Character.Head.Position)
+                end
+            end
+        end)
+        return ShootBtn
+    end
+
+    local shootBtnMurder, shootBtnSheriff
+    CreateToggle(Pages.Combat, "Aimbot Sheriff (Botão)", function(s)
+        if s then shootBtnSheriff = CreateShootButton("Sheriff") else if shootBtnSheriff then shootBtnSheriff:Destroy() end end
+    end)
+    CreateToggle(Pages.Combat, "Aimbot Murder (Botão)", function(s)
+        if s then shootBtnMurder = CreateShootButton("Murder") else if shootBtnMurder then shootBtnMurder:Destroy() end end
+    end)
+
+    local InfoLabel = Instance.new("TextLabel")
+    InfoLabel.Size = UDim2.new(0, 300, 0, 150)
+    InfoLabel.Text = "DARKZIN XITADO v2.2\n\nCriador: DarkzinXITADO\nAtualização: 16/10/2026\nJogo: Murder Mystery 2\n\nEstética: Satoru Gojo"
+    InfoLabel.TextColor3 = Theme.TextMuted
+    InfoLabel.Font = Enum.Font.GothamMedium
+    InfoLabel.TextSize = 16
+    InfoLabel.BackgroundTransparency = 1
+    InfoLabel.Parent = Pages.Info
+
+    Pages.ESP.Visible = true
+end
+
+-- SISTEMA DE KEY
+local function CreateKeyUI()
+    local KeyGui = Instance.new("ScreenGui")
+    KeyGui.Name = "DarkzinKeySystem"
+    SafeParent(KeyGui)
+
+    local KeyFrame = Instance.new("Frame")
+    KeyFrame.Size = UDim2.new(0, 300, 0, 200)
+    KeyFrame.Position = UDim2.new(0.5, -150, 0.5, -100)
+    KeyFrame.BackgroundColor3 = Theme.MainBG
+    KeyFrame.BorderSizePixel = 0
+    KeyFrame.Parent = KeyGui
+    Instance.new("UICorner", KeyFrame).CornerRadius = UDim.new(0, 20)
+    
+    local KeyStroke = Instance.new("UIStroke", KeyFrame)
+    KeyStroke.Thickness = 2
+    KeyStroke.Color = Theme.Accent
+
+    local KeyTitle = Instance.new("TextLabel")
+    KeyTitle.Text = "SISTEMA DE CHAVE"
+    KeyTitle.Size = UDim2.new(1, 0, 0, 50)
+    KeyTitle.Position = UDim2.new(0, 0, 0, 10)
+    KeyTitle.TextColor3 = Theme.Text
+    KeyTitle.Font = Enum.Font.GothamBold
+    KeyTitle.TextSize = 20
+    KeyTitle.BackgroundTransparency = 1
+    KeyTitle.Parent = KeyFrame
+
+    local KeyInput = Instance.new("TextBox")
+    KeyInput.Size = UDim2.new(0, 240, 0, 45)
+    KeyInput.Position = UDim2.new(0.5, -120, 0.5, -20)
+    KeyInput.BackgroundColor3 = Theme.GlassBG
+    KeyInput.TextColor3 = Theme.Text
+    KeyInput.PlaceholderText = "Insira a chave aqui..."
+    KeyInput.Text = ""
+    KeyInput.Font = Enum.Font.Gotham
+    KeyInput.TextSize = 16
+    KeyInput.Parent = KeyFrame
+    Instance.new("UICorner", KeyInput).CornerRadius = UDim.new(0, 10)
+
+    local VerifyBtn = Instance.new("TextButton")
+    VerifyBtn.Text = "VERIFICAR"
+    VerifyBtn.Size = UDim2.new(0, 240, 0, 45)
+    VerifyBtn.Position = UDim2.new(0.5, -120, 0.5, 30)
+    VerifyBtn.BackgroundColor3 = Theme.Accent
+    VerifyBtn.TextColor3 = Theme.Text
+    VerifyBtn.Font = Enum.Font.GothamBold
+    VerifyBtn.TextSize = 16
+    VerifyBtn.Parent = KeyFrame
+    Instance.new("UICorner", VerifyBtn).CornerRadius = UDim.new(0, 10)
+
+    VerifyBtn.MouseButton1Click:Connect(function()
+        if KeyInput.Text == CORRECT_KEY then
+            KeyGui:Destroy()
+            CreateMainUI()
+            for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then CreateESP(p) end end
+            Players.PlayerAdded:Connect(CreateESP)
+            GunESP()
+            AutoGunLogic()
+        else
+            VerifyBtn.Text = "CHAVE INCORRETA!"
+            VerifyBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            task.wait(2)
+            VerifyBtn.Text = "VERIFICAR"
+            VerifyBtn.BackgroundColor3 = Theme.Accent
+        end
+    end)
+end
+
+CreateKeyUI()
